@@ -3,7 +3,7 @@ import path = require('path');
 import mkdirp = require('mkdirp');
 import merge = require('deepmerge');
 import logger from './logger';
-import { Metadata, Option, NestedOptions } from './metadata-model';
+import { Metadata, Option, NestedOptions, Import } from './metadata-model';
 import { buildImports, FileImport } from './import-helper';
 import { getValues } from './helpers';
 
@@ -102,7 +102,7 @@ interface TypeDescription {
     primitiveTypes: string[];
     arrayTypes: string[];
     dxtypes?: string[];
-    typeImports?: { Name: string, File: String };
+    typeImports?: Import[];
 }
 
 export interface IObjectStore {
@@ -272,15 +272,10 @@ export default class DXComponentMetadataGenerator {
     }
 
     private getTypesDescription(optionMetadata: Option): TypeDescription {
-        let typeParts = this.getTypeParts(optionMetadata);
-
-        return {
-            primitiveTypes: typeParts.primitiveTypes,
-            arrayTypes: typeParts.arrayTypes
-        };
+        return this.getTypeParts(optionMetadata);
     }
 
-    private getTypeParts(optionMetadata: Option): { primitiveTypes: string[]; arrayTypes: string[] } {
+    private getTypeParts(optionMetadata: Option): { primitiveTypes: string[]; arrayTypes: string[], typeImports?: Import[] } {
         let primitiveTypes = optionMetadata.PrimitiveTypes ? optionMetadata.PrimitiveTypes.slice(0) : [];
         let arrayTypes = [];
 
@@ -301,7 +296,9 @@ export default class DXComponentMetadataGenerator {
             }
         }
 
-        return({ primitiveTypes, arrayTypes });
+        const typeImports = optionMetadata.TypeImports ? [...optionMetadata.TypeImports] : undefined;
+
+        return({ primitiveTypes, arrayTypes, typeImports });
     }
 
     private getObjectType(optionMetadata) {
@@ -341,8 +338,10 @@ export default class DXComponentMetadataGenerator {
         return result;
     }
 
-    private mergeArrayTypes<T>(array1: T[], array2: T[]): T[] {
-        let newTypes = array2.filter(type => array1.indexOf(type) === -1);
+    private mergeArrayTypes<T>(array1: T[] = [], array2: T[] = [], createFilterPredicate?: (targetArray: T[]) => (value: T, index: number, array: T[]) => unknown ): T[] {
+        const defaultFilter = (type) => array1.indexOf(type) === -1;
+        const filter = createFilterPredicate ? createFilterPredicate(array1) : defaultFilter;
+        let newTypes = array2.filter(filter) || [];
         return [].concat(array1, newTypes);
     }
 
@@ -526,6 +525,13 @@ export default class DXComponentMetadataGenerator {
                                     typesDescription.arrayTypes,
                                     property.typesDescription.arrayTypes);
 
+                                const typeImports = this.mergeArrayTypes<Import>(
+                                    typesDescription.typeImports ?? [],
+                                    property.typesDescription.typeImports ?? [],
+                                    (targetArray) => (item) => !targetArray.find(i => i.Name === item.Name));
+
+                                typesDescription.typeImports = typeImports.length ? typeImports : undefined;
+
                                 existingProperty.type = existingProperty.option?.IsEvent
                                     ? this.getEventType(typesDescription, existingProperty.option)
                                     : this.getType(typesDescription);
@@ -568,6 +574,12 @@ export default class DXComponentMetadataGenerator {
             .reduce((result, component) => {
                 let existingComponent = result.filter(c => c.className === component.baseClass)[0];
                 if (!existingComponent && component.baseClass) {
+                    const additionalImports = component.properties.reduce<Import[]>((result, current) => {
+                        if (current.typesDescription.typeImports) {
+                            result.push(...current.typesDescription.typeImports)
+                        }
+                        return result;
+                    }, [])
                     const nestedComponent: BaseNestedComponent & File = {
                         properties: component.properties,
                         events: component.events,
@@ -575,7 +587,8 @@ export default class DXComponentMetadataGenerator {
                         path: this.getBaseComponentPath(component),
                         baseClass: component.isCollection ? 'CollectionNestedOption' : 'NestedOption',
                         basePath: 'devextreme-angular/core',
-                        imports: buildImports(component.options, config.widgetPackageName)
+                        // imports: buildImports(component.options, config.widgetPackageName)
+                        imports: buildImports(component.properties.map(p => p.option), config.widgetPackageName, additionalImports)
                     };
 
                     result.push(nestedComponent);

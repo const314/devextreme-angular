@@ -6,9 +6,12 @@ export interface FileImport {
     importString: string;
 }
 
-export function buildImports(options: Option[], widgetPackageName: string): FileImport[] {
-
-    const importsByPath = extractImportsMeta(options).reduce(
+export function buildImports(options: Option[], widgetPackageName: string, additionalImports?: Import[]): FileImport[] {
+    const allImports = extractImportsMeta(options);
+    if (additionalImports) {
+        allImports.push(...additionalImports);
+    }
+    const importsByPath = allImports.reduce(
         (paths, {Path, Name, Alias}) => {
             if (!paths[Path]) {
                 paths[Path] = {};
